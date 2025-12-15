@@ -2,110 +2,134 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from scipy.interpolate import splprep, splev
-from scipy.ndimage import gaussian_filter1d
 import time
 
 st.set_page_config(page_title="Track Weakness Analyzer", layout="wide")
-st.title("Practice Track Generator")
+st.title("Practice Track Generator (Weakness-Based)")
 
-# ------------------ Compute curvature ------------------
+# Geometry helpers
 def curvature(x, y):
     dx = np.gradient(x)
     dy = np.gradient(y)
     ddx = np.gradient(dx)
     ddy = np.gradient(dy)
-    denom = (dx**2 + dy**2)**1.5 + 1e-12
+    denom = (dx**2 + dy**2)**1.5 + 1e-9
     return (dx*ddy - dy*ddx) / denom
 
-# ------------------ Distance to centerline ------------------
-def compute_distance(ref_x, ref_y, drv_x, drv_y):
-    # compute nearest point distance
-    d = np.hypot(drv_x[:,None] - ref_x[None,:], drv_y[:,None] - ref_y[None,:])
-    nearest = np.min(d, axis=1)
-    nearest_idx = np.argmin(d, axis=1)
-    return nearest, nearest_idx
 
-# ------------------ Weakness analysis ------------------
+def compute_normals(x, y):
+    dx = np.gradient(x)
+    dy = np.gradient(y)
+    mag = np.hypot(dx, dy) + 1e-9
+    nx = -dy / mag
+    ny = dx / mag
+    return nx, ny
+
+
+def generate_track_boundaries(x, y, width=6.0):
+    nx, ny = compute_normals(x, y)
+    lx = x + nx * width / 2
+    ly = y + ny * width / 2
+    rx = x - nx * width / 2
+    ry = y - ny * width / 2
+    return lx, ly, rx, ry
+
+
+def compute_distance(ref_x, ref_y, drv_x, drv_y):
+    d = np.hypot(drv_x[:,None]-ref_x[None,:],
+                 drv_y[:,None]-ref_y[None,:])
+    idx = np.argmin(d, axis=1)
+    return np.min(d, axis=1), idx
+
+
+# Previous Driver Simulation
+def bbox(x, y):
+    return x.min(), x.max(), y.min(), y.max()
+
+
+def normalize(x, y):
+    xmin, xmax, ymin, ymax = bbox(x, y)
+    xn = (x - xmin) / (xmax - xmin + 1e-9)
+    yn = (y - ymin) / (ymax - ymin + 1e-9)
+    return xn, yn
+
+
+def map_to_target(xn, yn, target_x, target_y):
+    txmin, txmax, tymin, tymax = bbox(target_x, target_y)
+
+    x_new = xn * (txmax - txmin) + txmin
+    y_new = yn * (tymax - tymin) + tymin
+
+    return x_new, y_new
+
+
+
+# Weakness analysis
 def analyze_weakness(ref_x, ref_y, drv_x, drv_y):
     dist, idx = compute_distance(ref_x, ref_y, drv_x, drv_y)
-    kappa = curvature(ref_x, ref_y)
+    kappa = np.abs(curvature(ref_x, ref_y))
 
-    # 1. Apex → large error on high curvature
-    highK = np.where(abs(kappa) > np.percentile(abs(kappa), 80))[0]
+    highK = np.where(kappa > np.percentile(kappa, 75))[0]
     apex_error = np.mean(dist[np.isin(idx, highK)])
-
-    # 2. Slalom weakness → oscillating error pattern
-    diffs = np.abs(np.diff(dist))
-    slalom_score = np.std(diffs)
-
-    # 3. General tracking error
+    slalom_score = np.std(np.diff(dist))
     mean_error = np.mean(dist)
-    max_error = np.max(dist)
 
-    # Decide primary weakness
-    if apex_error > 1.0:
-        primary = "apex"
-    elif slalom_score > 0.5:
-        primary = "slalom"
-    elif mean_error > 0.8:
-        primary = "cornering"
-    else:
-        primary = None
-
-    return {
-        "mean_error": mean_error,
-        "max_error": max_error,
-        "apex_error": apex_error,
-        "slalom_score": slalom_score,
-        "primary": primary
+    scores = {
+        "apex": apex_error / (mean_error + 1e-3),
+        "slalom": slalom_score / (mean_error + 1e-3),
+        "cornering": mean_error
     }
 
-# ------------------ Generate new centerline (biased) ------------------
-def generate_centerline(seed=None, focus=None, lap_target=1000):
-    np.random.seed(seed or int(time.time()))
+    primary = max(scores, key=scores.get)
 
-    # Bias probabilities
-    if focus == "apex":
-        probs = np.array([0.15,0.15,0.35,0.30,0.05])
-    elif focus == "slalom":
-        probs = np.array([0.10,0.10,0.10,0.10,0.60])
-    elif focus == "cornering":
-        probs = np.array([0.20,0.40,0.20,0.20,0.00])
+    return scores, primary
+
+# Track generation
+def generate_segment(stype):
+    if stype == "hairpin":
+        R = np.random.uniform(6, 10)
+        ang = np.deg2rad(np.random.uniform(150, 190))
+    elif stype == "constant":
+        R = np.random.uniform(18, 30)
+        ang = np.deg2rad(np.random.uniform(70, 110))
+    elif stype == "sweeper":
+        R = np.random.uniform(40, 70)
+        ang = np.deg2rad(np.random.uniform(40, 80))
+    elif stype == "slalom":
+        xs = np.linspace(0, 60, 80)
+        ys = 6 * np.sin(xs / 6)
+        return xs, ys, 0
     else:
-        probs = np.array([0.25,0.25,0.20,0.15,0.15])
+        L = np.random.uniform(30, 80)
+        xs = np.linspace(0, L, 40)
+        ys = np.zeros_like(xs)
+        return xs, ys, 0
 
-    probs = probs / probs.sum()
+    t = np.linspace(0, ang, 80)
+    xs = R * np.sin(t)
+    ys = R * (1 - np.cos(t))
+    return xs, ys, ang
 
-    segs = ["straight","sweeper","constant","hairpin","short_straight"]
-    X = []
-    Y = []
+
+def generate_centerline(focus, lap_target=800):
+    np.random.seed(int(time.time()))
+    X, Y = [], []
     x = y = 0
     heading = 0
     total = 0
 
-    while total < lap_target * 0.95:
-        stype = np.random.choice(segs, p=probs)
+    if focus == "apex":
+        pool = ["hairpin", "constant", "straight"]
+    elif focus == "slalom":
+        pool = ["slalom", "straight"]
+    else:
+        pool = ["constant", "sweeper", "straight"]
 
-        if stype == "straight":
-            L = np.random.uniform(40,80)
-            xs = np.linspace(0,L,20)
-            ys = np.zeros_like(xs)
+    while total < lap_target:
+        stype = np.random.choice(pool)
+        xs, ys, dtheta = generate_segment(stype)
 
-        elif stype == "short_straight":
-            L = np.random.uniform(10,25)
-            xs = np.linspace(0,L,15)
-            ys = np.zeros_like(xs)
-
-        else:
-            R = np.random.uniform(10,40)
-            ang = np.deg2rad(np.random.uniform(40,140))
-            sign = 1 if np.random.rand() < 0.5 else -1
-            t = np.linspace(0,sign*ang,40)
-            xs = R*np.sin(t)
-            ys = R*(1-np.cos(t))*sign
-
-        c,s = np.cos(heading), np.sin(heading)
+        c, s = np.cos(heading), np.sin(heading)
         xr = c*xs - s*ys + x
         yr = s*xs + c*ys + y
 
@@ -114,54 +138,66 @@ def generate_centerline(seed=None, focus=None, lap_target=1000):
 
         total += np.sum(np.hypot(np.diff(xr), np.diff(yr)))
         x, y = xr[-1], yr[-1]
-        heading = np.arctan2(yr[-1]-yr[0], xr[-1]-xr[0])
+        heading += dtheta
 
-    X = np.hstack(X)
-    Y = np.hstack(Y)
-    return X, Y
+    return np.hstack(X), np.hstack(Y)
 
-# ------------------ Streamlit UI ------------------
+# UI
 cl_file = st.sidebar.file_uploader("Centerline CSV", type="csv")
 drv_file = st.sidebar.file_uploader("Driver Run CSV", type="csv")
-lap_target = st.sidebar.number_input("Lap length (m)", 400, 5000, 1000)
+lap_target = st.sidebar.slider("Lap Length (m)", 50, 1000, 500)
+track_width = st.sidebar.slider("Track Width (m)", 4.0, 10.0, 6.0)
 
-if st.sidebar.button("Analyze & Generate"):
+if st.sidebar.button("Analyze & Generate Track"):
     if cl_file is None or drv_file is None:
-        st.error("Please upload BOTH files.")
+        st.error("Please upload BOTH centerline and driver files.")
     else:
         ref = pd.read_csv(cl_file)
-        ref_x = ref["xRef"].values
-        ref_y = ref["yRef"].values
-
         drv = pd.read_csv(drv_file)
-        drv_x = drv["<X>"].values
-        drv_y = drv["<Y>"].values
 
-        # analyze
-        results = analyze_weakness(ref_x, ref_y, drv_x, drv_y)
-        st.subheader("Detected Metrics")
-        st.json(results)
+        ref_x, ref_y = ref.iloc[:,0].values, ref.iloc[:,1].values
+        drv_x, drv_y = drv.iloc[:,0].values, drv.iloc[:,1].values
 
-        focus = results["primary"]
-        if focus is None:
-            st.success("Driver has no major weakness → generating balanced track.")
-        else:
-            st.warning(f"Detected primary weakness: **{focus}**")
+        scores, focus = analyze_weakness(ref_x, ref_y, drv_x, drv_y)
 
-        # generate new map
-        gx, gy = generate_centerline(focus=focus, lap_target=lap_target)
+        st.subheader("Detected Weakness Scores")
+        st.json(scores)
+        st.success(f"Primary weakness detected: **{focus.upper()}**")
 
-        # visualize
+        gx, gy = generate_centerline(focus, lap_target)
+        lx, ly, rx, ry = generate_track_boundaries(gx, gy, track_width)
+
         fig, ax = plt.subplots(figsize=(8,7))
-        ax.plot(ref_x, ref_y, "--", label="Reference")
-        ax.plot(drv_x, drv_y, ".", alpha=0.6, label="Driver")
-        ax.plot(gx, gy, "-", label="Generated Track")
+
+        # map reference + driver into generated track space 
+        ref_xn, ref_yn = normalize(ref_x, ref_y)
+        drv_xn, drv_yn = normalize(drv_x, drv_y)
+
+        ref_xp, ref_yp = map_to_target(ref_xn, ref_yn, gx, gy)
+        drv_xp, drv_yp = map_to_target(drv_xn, drv_yn, gx, gy)
+
+        # plotting 
+        fig, ax = plt.subplots(figsize=(8,7))
+
+        ax.fill(
+            np.r_[lx, rx[::-1]],
+            np.r_[ly, ry[::-1]],
+            color="lightgray",
+            alpha=0.7,
+            label="Track Surface"
+        )
+
+        ax.plot(lx, ly, "k")
+        ax.plot(rx, ry, "k")
+        ax.plot(gx, gy, "g--", label="Generated Centerline")
+
+        ax.plot(ref_xp, ref_yp, "--", label="Reference (mapped)")
+        ax.plot(drv_xp, drv_yp, ".", alpha=0.4, label="Driver (mapped)")
+
         ax.axis("equal")
         ax.legend()
         st.pyplot(fig)
 
-        st.download_button(
-            "Download New Practice Track",
-            pd.DataFrame({"x":gx,"y":gy}).to_csv(index=False),
-            file_name="generated_track.csv"
-        )
+
+
+
