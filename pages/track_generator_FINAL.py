@@ -4,12 +4,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import time
 
-st.set_page_config(page_title="AI Practice Track Generator", layout="wide")
-st.title("Generative Practice Track (perturbation-based generation)")
-
-# ============================================================
-# Geometry utilities
-# ============================================================
+st.set_page_config(page_title="Practice Track Generator", layout="wide")
+st.title("Generative Practice Track")
 
 def curvature(x, y):
     dx = np.gradient(x)
@@ -45,10 +41,7 @@ def compute_distance(ref_x, ref_y, drv_x, drv_y):
     return np.min(d, axis=1), idx
 
 
-# ============================================================
-# Weakness analysis (driver-based)
-# ============================================================
-
+# Weakness analysis
 def analyze_weakness(ref_x, ref_y, drv_x, drv_y):
     dist, idx = compute_distance(ref_x, ref_y, drv_x, drv_y)
     kappa = np.abs(curvature(ref_x, ref_y))
@@ -62,10 +55,7 @@ def analyze_weakness(ref_x, ref_y, drv_x, drv_y):
     return vec / (np.linalg.norm(vec) + 1e-9)
 
 
-# ============================================================
 # Track segment primitives
-# ============================================================
-
 def generate_segment(stype, mean_radius=20):
     if stype == "hairpin":
         R = np.random.uniform(0.6, 0.8) * mean_radius
@@ -92,10 +82,7 @@ def generate_segment(stype, mean_radius=20):
     return xs, ys, ang
 
 
-# ============================================================
 # Parameter-based track generator
-# ============================================================
-
 def generate_centerline_from_params(params, lap_target):
     X, Y = [], []
     x = y = heading = total = 0
@@ -130,9 +117,7 @@ def generate_centerline_from_params(params, lap_target):
     return np.hstack(X), np.hstack(Y)
 
 
-# ============================================================
-# Track metrics (what the optimizer learns)
-# ============================================================
+# Track metrics
 
 def extract_track_metrics(x, y):
     k = np.abs(curvature(x, y))
@@ -148,9 +133,7 @@ def fitness(track_x, track_y, weakness_vec):
     return np.dot(track_vec, weakness_vec)
 
 
-# ============================================================
-# Evolutionary optimizer (Option A)
-# ============================================================
+# optimizer
 def arc_length(x, y):
     ds = np.hypot(np.diff(x), np.diff(y))
     s = np.insert(np.cumsum(ds), 0, 0.0)
@@ -247,65 +230,6 @@ def deform_reference_track(
     new_y = ref_y + delta * ny
 
     return new_x, new_y, focus
-# def deform_reference_track(ref_x, ref_y, weakness_vec, gain=0.4):
-#     s = arc_length(ref_x, ref_y)
-#     s_norm = s / (s[-1] + 1e-9)
-
-#     kappa = curvature(ref_x, ref_y)
-#     k_new = kappa.copy()
-
-#     labels = ["apex", "slalom", "cornering"]
-#     focus = labels[np.argmax(weakness_vec)]
-
-#     if focus == "apex":
-#         apex_idx = find_apex_indices(kappa, percentile=80)
-#         window = 6
-
-#         delta_k = np.zeros_like(kappa)
-
-#         for i in apex_idx:
-#             for j in range(-window, window + 1):
-#                 idx = i + j
-#                 if 0 <= idx < len(kappa):
-#                     w = np.exp(-(j / window) ** 2)
-#                     delta_k[idx] += (
-#                         gain
-#                         * weakness_vec[0]
-#                         * w
-#                         * np.sign(kappa[i])
-#                     )
-
-#         # 🔑 CRITICAL: zero-mean compensation
-#         delta_k -= np.mean(delta_k)
-
-#         k_new += delta_k
-
-#     elif focus == "slalom":
-#         mask = np.abs(kappa) < np.percentile(np.abs(kappa), 30)
-#         freq = 6
-#         delta_k = np.zeros_like(kappa)
-#         delta_k[mask] = (
-#             gain
-#             * weakness_vec[1]
-#             * np.sin(2 * np.pi * freq * s_norm[mask])
-#         )
-#         delta_k -= np.mean(delta_k)
-#         k_new += delta_k
-
-#     else:  # cornering
-#         delta_k = gain * weakness_vec[2] * np.gradient(kappa)
-#         delta_k -= np.mean(delta_k)
-#         k_new += delta_k
-
-#     # smooth curvature slightly (geometry-safe)
-#     k_new = np.convolve(k_new, np.ones(9) / 9, mode="same")
-
-#     new_x, new_y = integrate_centerline_from_curvature(
-#         ref_x, ref_y, k_new
-#     )
-
-#     return new_x, new_y, focus
-
 
 
 def random_params():
@@ -346,9 +270,7 @@ def optimize_track(weakness_vec, lap_target, generations=40, pop_size=30):
     return scored[0][1]
 
 
-# ============================================================
 # UI
-# ============================================================
 
 cl_file = st.sidebar.file_uploader("Reference Centerline CSV", type="csv")
 drv_file = st.sidebar.file_uploader("Driver Run CSV", type="csv")
