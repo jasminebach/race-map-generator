@@ -90,6 +90,15 @@ def decision_from_timeseries(kappa_ts, error_ts):
 
     return decision, metrics
 
+def detect_problem_segments(s, kappa_ts, error_ts):
+    threshold = np.percentile(error_ts, 80)
+    bad_idx = error_ts > threshold
+
+    return {
+        "segments": list(zip(s[bad_idx][::10], error_ts[bad_idx][::10])),
+        "coverage": np.mean(bad_idx)
+    }
+
 
 # =====================================================
 # Track deformation
