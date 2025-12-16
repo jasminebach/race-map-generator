@@ -2,6 +2,8 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+# INSERT AT TOP WITH OTHER IMPORTS
+from collections import defaultdict
 
 # =====================================================
 # Streamlit setup
@@ -252,6 +254,87 @@ def plot_arc_diagnostics(s, kappa, dist, delta):
 
     st.pyplot(fig)
 
+# INSERT BELOW decision_from_timeseries
+def compute_batch_metrics(run_results):
+    """
+    Aggregates metrics across multiple runs.
+    run_results: list of dicts with keys:
+      - decision
+      - weakness
+      - metrics
+      - mean_error
+    """
+    batch = {}
+
+    decisions = [r["decision"] for r in run_results]
+    batch["decision_distribution"] = pd.Series(decisions).value_counts().to_dict()
+
+    W = np.vstack([r["weakness"] for r in run_results])
+    batch["weakness_mean"] = W.mean(axis=0)
+    batch["weakness_std"] = W.std(axis=0)
+
+    errors = [r["mean_error"] for r in run_results]
+    batch["mean_error_avg"] = float(np.mean(errors))
+    batch["mean_error_std"] = float(np.std(errors))
+
+    batch["num_runs"] = len(run_results)
+
+    return batch
+
+# INSERT BELOW compute_batch_metrics
+def analyze_batch_runs(ref_x, ref_y, batch_driver_runs):
+    """
+    batch_driver_runs: list of (drv_x, drv_y)
+    """
+    run_results = []
+
+    for drv_x, drv_y in batch_driver_runs:
+        dist, idx = compute_distance(ref_x, ref_y, drv_x, drv_y)
+        kappa_ts = np.abs(curvature(ref_x, ref_y))[idx]
+
+        w = analyze_weakness(ref_x, ref_y, drv_x, drv_y)
+        decision, metrics = decision_from_timeseries(kappa_ts, dist)
+
+        run_results.append({
+            "decision": decision,
+            "weakness": w,
+            "metrics": metrics,
+            "mean_error": float(np.mean(dist))
+        })
+
+    return compute_batch_metrics(run_results), run_results
+
+# INSERT BELOW plot_weakness_vector
+def plot_batch_weakness_distribution(w_mean, w_std):
+    labels = ["Apex", "Slalom", "Cornering"]
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.bar(labels, w_mean, yerr=w_std, capsize=5)
+    ax.set_ylim(0, 1)
+    ax.set_title("Batch Weakness Profile (mean ± std)")
+    st.pyplot(fig)
+
+# INSERT BELOW plot_batch_weakness_distribution
+def plot_decision_distribution(decision_counts):
+    fig, ax = plt.subplots(figsize=(5, 4))
+    ax.bar(decision_counts.keys(), decision_counts.values())
+    ax.set_title("Training Decision Distribution (Batch)")
+    ax.set_ylabel("Count")
+    st.pyplot(fig)
+
+# INSERT BELOW build_time_series
+def load_batch_driver_files(uploaded_files):
+    """
+    uploaded_files: list of uploaded CSVs
+    Returns list of (drv_x, drv_y)
+    """
+    runs = []
+    for f in uploaded_files:
+        df = pd.read_csv(f)
+        runs.append((df.iloc[:, 0].values, df.iloc[:, 1].values))
+    return runs
+
+
 # =====================================================
 # UI
 # =====================================================
@@ -311,6 +394,33 @@ if run and cl_file and drv_file:
     ax.axis("equal")
     ax.legend()
     st.pyplot(fig)
+
+
+# INSERT BELOW sidebar file upload section
+with st.sidebar:
+    st.header("📦 Batch Analysis (Optional)")
+    batch_files = st.file_uploader(
+        "Upload Multiple Driver Runs",
+        type="csv",
+        accept_multiple_files=True
+    )
+
+# INSERT AT END OF if run and cl_file and drv_file:
+if batch_files and len(batch_files) > 1:
+    st.subheader("📊 Batch-Level Analytics")
+
+    batch_runs = load_batch_driver_files(batch_files)
+    batch_summary, _ = analyze_batch_runs(ref_x, ref_y, batch_runs)
+
+    st.metric("Number of Runs", batch_summary["num_runs"])
+    st.json(batch_summary["decision_distribution"])
+
+    plot_batch_weakness_distribution(
+        batch_summary["weakness_mean"],
+        batch_summary["weakness_std"]
+    )
+
+    plot_decision_distribution(batch_summary["decision_distribution"])
 
 
 # if run and cl_file and drv_file:
