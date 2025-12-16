@@ -192,7 +192,7 @@ if st.sidebar.button("Analyze & Generate Track"):
         ax.plot(gx, gy, "g--", label="Generated Centerline")
 
         ax.plot(ref_xp, ref_yp, "--", label="Reference (mapped)")
-        ax.plot(drv_xp, drv_yp, ".", alpha=0.4, label="Driver (mapped)")
+        # ax.plot(drv_xp, drv_yp, ".", alpha=0.4, label="Driver (mapped)")
 
         ax.axis("equal")
         ax.legend()
