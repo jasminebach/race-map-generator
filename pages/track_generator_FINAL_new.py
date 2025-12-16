@@ -99,6 +99,19 @@ def detect_problem_segments(s, kappa_ts, error_ts):
         "coverage": np.mean(bad_idx)
     }
 
+def diagnose_failure_mode(kappa_ts, error_ts):
+    corr = np.corrcoef(kappa_ts, error_ts)[0, 1]
+
+    if corr > 0.6:
+        return "GEOMETRY_LIMITED"
+    elif np.std(np.diff(error_ts)) > np.mean(error_ts) * 0.3:
+        return "CONTROL_INSTABILITY"
+    else:
+        return "GLOBAL_INEFFICIENCY"
+
+def deformation_strength(error_ts):
+    return np.clip(np.mean(error_ts) / 30.0, 0.3, 1.0)
+
 
 # =====================================================
 # Track deformation
