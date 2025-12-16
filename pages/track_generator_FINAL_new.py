@@ -334,6 +334,100 @@ def load_batch_driver_files(uploaded_files):
         runs.append((df.iloc[:, 0].values, df.iloc[:, 1].values))
     return runs
 
+# INSERT BELOW plot_weakness_vector
+def plot_driver_weakness_explainability(ref_x, ref_y, drv_x, drv_y):
+    """
+    Visual explanation of how w_apex, w_slalom, w_corner are computed
+    """
+
+    dist, idx = compute_distance(ref_x, ref_y, drv_x, drv_y)
+    s = arc_length(ref_x, ref_y)
+    kappa = np.abs(curvature(ref_x, ref_y))
+
+    high_k = np.percentile(kappa, 75)
+    low_k = np.percentile(kappa, 30)
+
+    fig, ax = plt.subplots(3, 1, figsize=(10, 9), sharex=True)
+
+    # --- Curvature ---
+    ax[0].plot(s, kappa, label="Curvature κ(s)")
+    ax[0].axhline(high_k, linestyle="--", color="red", label="Apex threshold")
+    ax[0].axhline(low_k, linestyle="--", color="gray", label="Straight threshold")
+    ax[0].set_ylabel("κ")
+    ax[0].set_title("Track Geometry (What is difficult)")
+    ax[0].legend()
+
+    # --- Tracking error ---
+    ax[1].plot(s[idx], dist)
+    ax[1].set_ylabel("Error (m)")
+    ax[1].set_title("Driver Deviation (What the driver does)")
+
+    # --- Attribution ---
+    apex_err = dist[kappa[idx] > high_k]
+    straight_err = dist[kappa[idx] < low_k]
+
+    ax[2].bar(
+        ["Apex Error", "Slalom Instability", "Mean Error"],
+        [
+            np.mean(apex_err),
+            np.std(np.diff(dist)),
+            np.mean(dist),
+        ],
+        color=["red", "blue", "green"],
+    )
+    ax[2].set_title("Weakness Feature Attribution")
+    ax[2].set_ylabel("Magnitude")
+
+    st.pyplot(fig)
+
+# INSERT BELOW plot_arc_diagnostics
+def plot_track_deformation_explainability(ref_x, ref_y, delta, focus):
+    """
+    Explains how weakness controls the deformation field
+    """
+
+    s = arc_length(ref_x, ref_y)
+
+    fig, ax = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+
+    # --- Deformation field ---
+    ax[0].plot(s, delta)
+    ax[0].set_ylabel("Δ (m)")
+    ax[0].set_title(f"Deformation Field (Focused on: {focus.upper()})")
+
+    # --- Interpretation ---
+    ax[1].axis("off")
+    explanation = f"""
+Weakness-driven deformation logic:
+
+• Dominant weakness: {focus.upper()}
+• Deformation applied ONLY in relevant regions
+• Offset is lateral (normal to track)
+• Sinusoidal + smoothing preserves drivability
+• Track topology is preserved
+"""
+    ax[1].text(0.01, 0.7, explanation, fontsize=12)
+
+    st.pyplot(fig)
+
+# INSERT BELOW plot_track_deformation_explainability
+def plot_training_policy_explainability(w):
+    labels = ["Apex", "Slalom", "Cornering"]
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.bar(labels, w, color=["red", "blue", "green"])
+    ax.set_ylim(0, 1)
+    ax.set_title("Training Policy Encoded by Weakness Vector")
+
+    for i, txt in enumerate([
+        "Exaggerate corners",
+        "Add oscillations",
+        "Increase global difficulty"
+    ]):
+        ax.text(i, w[i] + 0.03, txt, ha="center", fontsize=9)
+
+    st.pyplot(fig)
+
 
 # =====================================================
 # UI
@@ -346,36 +440,43 @@ with st.sidebar:
     run = st.button("Analyze & Generate AI Track")
 
 
-
 # =====================================================
 # Run pipeline
 # =====================================================
 
 if run and cl_file and drv_file:
+    # ------------------------------
+    # Load data
+    # ------------------------------
     ref = pd.read_csv(cl_file)
     drv = pd.read_csv(drv_file)
 
     ref_x, ref_y = ref.iloc[:, 0].values, ref.iloc[:, 1].values
     drv_x, drv_y = drv.iloc[:, 0].values, drv.iloc[:, 1].values
 
-    # ---- TIME-SERIES ALIGNMENT ----
+    # ------------------------------
+    # TIME-SERIES ALIGNMENT
+    # ------------------------------
     dist, idx = compute_distance(ref_x, ref_y, drv_x, drv_y)
     s_ref = arc_length(ref_x, ref_y)
-    s_ts = s_ref[idx]                     # spatial
+    s_ts = s_ref[idx]                     # spatial alignment
     kappa_ts = np.abs(curvature(ref_x, ref_y))[idx]
     t = np.arange(len(dist))              # TRUE time index
 
-    # ---- DECISION ----
+    # ------------------------------
+    # DECISION
+    # ------------------------------
     w = analyze_weakness(ref_x, ref_y, drv_x, drv_y)
     decision, metrics = decision_from_timeseries(kappa_ts, dist)
 
-    # ---- TRACK GENERATION ----
+    # ------------------------------
+    # TRACK GENERATION
+    # ------------------------------
     gx, gy, delta, focus = deform_reference_track(ref_x, ref_y, w)
 
     # =====================================================
     # OUTPUT
     # =====================================================
-
     st.success(f"🎯 **Training Decision: {decision}**")
     st.json(metrics)
 
@@ -395,8 +496,19 @@ if run and cl_file and drv_file:
     ax.legend()
     st.pyplot(fig)
 
+    # =====================================================
+    # 🧠 EXPLAINABILITY (MUST BE INSIDE THIS BLOCK)
+    # =====================================================
+    st.subheader("🧠 Explainability")
 
-# INSERT BELOW sidebar file upload section
+    plot_driver_weakness_explainability(ref_x, ref_y, drv_x, drv_y)
+    plot_training_policy_explainability(w)
+    plot_track_deformation_explainability(ref_x, ref_y, delta, focus)
+
+
+# =====================================================
+# Sidebar: Batch Analysis Upload
+# =====================================================
 with st.sidebar:
     st.header("📦 Batch Analysis (Optional)")
     batch_files = st.file_uploader(
@@ -405,8 +517,10 @@ with st.sidebar:
         accept_multiple_files=True
     )
 
-# INSERT AT END OF if run and cl_file and drv_file:
-if batch_files and len(batch_files) > 1:
+# =====================================================
+# Batch-Level Analytics (SAFE GUARD)
+# =====================================================
+if run and cl_file and drv_file and batch_files and len(batch_files) > 1:
     st.subheader("📊 Batch-Level Analytics")
 
     batch_runs = load_batch_driver_files(batch_files)
