@@ -7,33 +7,43 @@ import os
 # Streamlit setup
 # =====================================================
 st.set_page_config(layout="wide")
-st.title("🧠 Weakness Extraction – Horizontal Diagram")
+st.title("🧠 Weakness Extraction – Diagram & Code")
 
 st.markdown("""
-This diagram represents the **horizontal data flow**
-for weakness extraction based on geometry and distance.
+This page visualizes the **weakness extraction pipeline**
+side by side with its **actual Python implementation**.
 
-• Left → Right processing  
-• Nodes are **draggable**  
-• Hover nodes for meaning  
+• Left: interactive pipeline diagram  
+• Right: source code  
 """)
+
+# =====================================================
+# Code to display (SOURCE OF TRUTH)
+# =====================================================
+ANALYZE_CODE = """
+def analyze_weakness(ref_x, ref_y, drv_x, drv_y):
+    dist, idx = compute_distance(ref_x, ref_y, drv_x, drv_y)
+    kappa = np.abs(curvature(ref_x, ref_y))
+
+    apex_mask = kappa > np.percentile(kappa, 75)
+
+    w_apex = np.mean(dist[np.isin(idx, np.where(apex_mask)[0])])
+    w_slalom = np.std(np.diff(dist))
+    w_corner = np.mean(dist)
+
+    w = np.array([w_apex, w_slalom, w_corner])
+    return w / (np.linalg.norm(w) + 1e-9)
+"""
 
 # =====================================================
 # Build horizontal PyVis network
 # =====================================================
-def build_horizontal_network():
-    net = Network(
-        height="650px",
-        width="100%",
-        directed=True
-    )
+def build_weakness_network():
+    net = Network(height="650px", width="100%", directed=True)
 
-    # Disable physics initially for clean layout
+    # Clean horizontal layout
     net.toggle_physics(False)
 
-    # -------------------------------------------------
-    # Color scheme
-    # -------------------------------------------------
     COLORS = {
         "input": "#97C2FC",
         "process": "#D3D3D3",
@@ -42,28 +52,27 @@ def build_horizontal_network():
     }
 
     # -------------------------------------------------
-    # Nodes with fixed x positions (horizontal layout)
+    # Nodes (fixed horizontal layout)
     # -------------------------------------------------
     nodes = [
         # Inputs
-        ("ref_xy", "ref_x, ref_y", "input", 0, 200),
-        ("dxy", "dx, dy", "input", 0, 350),
+        ("ref_xy", "ref_x, ref_y", "input", 0, 180),
+        ("drv_xy", "drv_x, drv_y", "input", 0, 320),
 
         # Geometry
-        ("kappa", "curvature\n(kappa)", "process", 300, 200),
-        ("distance", "compute\ndistance", "process", 300, 350),
+        ("distance", "compute distance\n(dist, idx)", "process", 300, 260),
+        ("kappa", "curvature\n(kappa)", "process", 300, 120),
 
-        # Intermediate
-        ("apex_mask", "apex mask", "decision", 600, 200),
-        ("dist_idx", "dist, idx", "process", 600, 350),
+        # Mask
+        ("apex_mask", "apex mask\n(kappa > p75)", "decision", 600, 120),
 
-        # Weakness branches
-        ("w_apex", "w_apex", "output", 900, 120),
-        ("w_slalom", "w_slalom", "output", 900, 260),
-        ("w_corner", "w_corner", "output", 900, 400),
+        # Weakness metrics
+        ("w_apex", "w_apex\nmean dist @ apex", "process", 900, 60),
+        ("w_slalom", "w_slalom\nstd(diff(dist))", "process", 900, 220),
+        ("w_corner", "w_corner\nmean(dist)", "process", 900, 380),
 
-        # Final output
-        ("weakness_vec", "weakness_vec", "output", 1200, 260),
+        # Output
+        ("weakness_vec", "normalized\nweakness_vec", "output", 1200, 220),
     ]
 
     for node_id, label, typ, x, y in nodes:
@@ -75,27 +84,25 @@ def build_horizontal_network():
             y=y,
             fixed=True,
             color=COLORS[typ],
-            shape="box" if typ != "decision" else "diamond"
+            shape="box" if typ != "decision" else "diamond",
         )
 
     # -------------------------------------------------
-    # Edges (exactly matching your sketch)
+    # Edges (exact mapping to code)
     # -------------------------------------------------
     edges = [
-        ("ref_xy", "kappa"),
-        ("dxy", "kappa"),
-
         ("ref_xy", "distance"),
-        ("dxy", "distance"),
+        ("drv_xy", "distance"),
+
+        ("ref_xy", "kappa"),
 
         ("kappa", "apex_mask"),
-        ("distance", "dist_idx"),
 
+        ("distance", "w_apex"),
         ("apex_mask", "w_apex"),
-        ("apex_mask", "w_slalom"),
-        ("apex_mask", "w_corner"),
 
-        ("dist_idx", "w_slalom"),
+        ("distance", "w_slalom"),
+        ("distance", "w_corner"),
 
         ("w_apex", "weakness_vec"),
         ("w_slalom", "weakness_vec"),
@@ -108,33 +115,41 @@ def build_horizontal_network():
     return net
 
 # =====================================================
-# Render network
+# Layout: SIDE BY SIDE
 # =====================================================
-net = build_horizontal_network()
+left, right = st.columns([3, 2])
 
-with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
-    net.save_graph(tmp.name)
-    html_path = tmp.name
+with left:
+    st.subheader("📊 Weakness Extraction Diagram")
 
-st.components.v1.html(
-    open(html_path, "r", encoding="utf-8").read(),
-    height=700,
-    scrolling=True
-)
+    net = build_weakness_network()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
+        net.save_graph(tmp.name)
+        html_path = tmp.name
 
-os.unlink(html_path)
+    st.components.v1.html(
+        open(html_path, "r", encoding="utf-8").read(),
+        height=700,
+        scrolling=True,
+    )
+
+    os.unlink(html_path)
+
+with right:
+    st.subheader("🧩 Python Implementation")
+    st.code(ANALYZE_CODE, language="python")
 
 # =====================================================
-# Explanation panel
+# Footer explanation
 # =====================================================
 st.markdown("---")
 st.markdown("""
-### 🧩 Interpretation
+### How to read this
 
-- **Left**: raw geometric signals  
-- **Middle**: curvature & distance analysis  
-- **Right**: weakness scores per driving skill  
-- **Final**: aggregated `weakness_vec`
+• **Top branch**: curvature-based apex analysis  
+• **Middle branch**: distance alignment & indexing  
+• **Bottom branch**: global cornering deviation  
+• **Right**: normalized weakness vector  
 
-This diagram mirrors your handwritten logic exactly.
+Each diagram node corresponds directly to a variable in the code.
 """)

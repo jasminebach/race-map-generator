@@ -7,19 +7,18 @@ import os
 # Streamlit setup
 # =====================================================
 st.set_page_config(layout="wide")
-st.title("🧠 Track Deformation Pipeline – Explainability Diagram")
+st.title("🧠 Track Deformation Pipeline – Diagram & Code")
 
 st.markdown("""
-This diagram visualizes the **full deformation pipeline**
-derived from `deform_reference_track()`.
+This page shows the **deformation pipeline** side by side with its
+**actual Python implementation**.
 
-• Horizontal (left → right)  
-• Nodes are draggable  
-• Matches the handwritten design  
+• Left: interactive pipeline diagram  
+• Right: source code  
 """)
 
 # =====================================================
-# Sidebar inputs (for context only)
+# Sidebar inputs (context only)
 # =====================================================
 st.sidebar.header("🔧 Context Inputs")
 
@@ -32,16 +31,45 @@ weakness_vec = [
 max_offset = st.sidebar.slider("Max Offset", 0.5, 5.0, 3.0)
 
 # =====================================================
+# Code to display (SOURCE OF TRUTH)
+# =====================================================
+DEFORM_CODE = """
+def deform_reference_track(ref_x, ref_y, weakness_vec, max_offset=3.0):
+    s = arc_length(ref_x, ref_y)
+    s_norm = s / (s[-1] + 1e-9)
+
+    kappa = np.abs(curvature(ref_x, ref_y))
+    nx, ny = compute_normals(ref_x, ref_y)
+
+    labels = ["apex", "slalom", "cornering"]
+    focus = labels[np.argmax(weakness_vec)]
+
+    delta = np.zeros_like(s)
+
+    if focus == "apex":
+        mask = kappa > np.percentile(kappa, 75)
+        strength = weakness_vec[0]
+    elif focus == "slalom":
+        mask = kappa < np.percentile(kappa, 30)
+        strength = weakness_vec[1]
+    else:
+        mask = np.ones_like(kappa, dtype=bool)
+        strength = weakness_vec[2]
+
+    delta[mask] = max_offset * strength * np.sin(2 * np.pi * 4 * s_norm[mask])
+    delta = np.convolve(delta, np.ones(15) / 15, mode="same")
+
+    new_x = ref_x + delta * nx
+    new_y = ref_y + delta * ny
+
+    return new_x, new_y, delta, focus
+"""
+
+# =====================================================
 # Build PyVis network
 # =====================================================
 def build_deformation_network():
-    net = Network(
-        height="720px",
-        width="100%",
-        directed=True
-    )
-
-    # physics OFF for clean horizontal layout
+    net = Network(height="720px", width="100%", directed=True)
     net.toggle_physics(False)
 
     COLORS = {
@@ -51,22 +79,16 @@ def build_deformation_network():
         "output": "#77DD77",
     }
 
-    # -------------------------------------------------
-    # Nodes (fixed horizontal layout)
-    # -------------------------------------------------
     nodes = [
-        # Inputs
         ("ref_xy", "(ref_x, ref_y)", "input", 0, 180),
         ("weakness_vec", "weakness_vec", "input", 0, 420),
         ("max_offset", "max_offset", "input", 0, 260),
 
-        # Geometry
         ("arc_length", "arc length (s)", "process", 300, 120),
         ("s_norm", "s_norm", "process", 600, 120),
         ("normals", "compute normals\n(nx, ny)", "process", 300, 260),
         ("kappa", "curvature\n(kappa)", "process", 300, 420),
 
-        # Weakness logic
         ("argmax", "argmax", "decision", 300, 560),
         ("focus", "focus", "decision", 600, 560),
         ("strength", "strength", "process", 600, 420),
@@ -77,11 +99,9 @@ def build_deformation_network():
 
         ("mask", "mask", "decision", 1200, 440),
 
-        # Deformation
         ("delta_raw", "delta_raw", "process", 900, 180),
         ("delta_smooth", "delta_smooth", "process", 1200, 180),
 
-        # Outputs
         ("new_x", "new_x", "output", 1500, 120),
         ("new_y", "new_y", "output", 1500, 220),
     ]
@@ -95,25 +115,19 @@ def build_deformation_network():
             y=y,
             fixed=True,
             color=COLORS[typ],
-            shape="box" if typ != "decision" else "diamond"
+            shape="box" if typ != "decision" else "diamond",
         )
 
-    # -------------------------------------------------
-    # Edges (exact mapping from your sketch)
-    # -------------------------------------------------
     edges = [
-        # Geometry
         ("ref_xy", "arc_length"),
         ("arc_length", "s_norm"),
         ("ref_xy", "normals"),
         ("ref_xy", "kappa"),
 
-        # Weakness
         ("weakness_vec", "argmax"),
         ("argmax", "focus"),
         ("weakness_vec", "strength"),
 
-        # Masking
         ("kappa", "apex_mask"),
         ("kappa", "slalom_mask"),
         ("kappa", "corner_mask"),
@@ -126,7 +140,6 @@ def build_deformation_network():
         ("slalom_mask", "mask"),
         ("corner_mask", "mask"),
 
-        # Deformation signal
         ("s_norm", "delta_raw"),
         ("strength", "delta_raw"),
         ("max_offset", "delta_raw"),
@@ -134,7 +147,6 @@ def build_deformation_network():
 
         ("delta_raw", "delta_smooth"),
 
-        # Projection
         ("delta_smooth", "new_x"),
         ("normals", "new_x"),
         ("delta_smooth", "new_y"),
@@ -147,32 +159,39 @@ def build_deformation_network():
     return net
 
 # =====================================================
-# Render diagram
+# Layout: SIDE BY SIDE
 # =====================================================
-net = build_deformation_network()
+left, right = st.columns([3, 2])
 
-with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
-    net.save_graph(tmp.name)
-    html_path = tmp.name
+with left:
+    st.subheader("📊 Deformation Pipeline Diagram")
 
-st.components.v1.html(
-    open(html_path, "r", encoding="utf-8").read(),
-    height=750,
-    scrolling=True
-)
+    net = build_deformation_network()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
+        net.save_graph(tmp.name)
+        html_path = tmp.name
 
-os.unlink(html_path)
+    st.components.v1.html(
+        open(html_path, "r", encoding="utf-8").read(),
+        height=750,
+        scrolling=True,
+    )
+
+    os.unlink(html_path)
+
+with right:
+    st.subheader("🧩 Python Implementation")
+    st.code(DEFORM_CODE, language="python")
 
 # =====================================================
-# Explanation
+# Footer explanation
 # =====================================================
 st.markdown("---")
 st.markdown("""
-### 🧩 How to Read This
+### Why this layout works
 
-• **Top lane**: geometry → deformation → projection  
-• **Bottom lane**: weakness decision → masking  
-• **Right**: final deformed trajectory  
-
-This diagram exactly mirrors your handwritten pipeline.
+• Diagram shows **conceptual flow**  
+• Code shows **exact implementation**  
+• One-to-one correspondence between nodes and variables  
+• Ideal for debugging, teaching, and thesis figures  
 """)
